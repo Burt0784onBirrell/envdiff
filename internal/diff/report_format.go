@@ -3,62 +3,69 @@ package diff
 import (
 	"fmt"
 	"io"
-	"strings"
 )
 
-// WriteFormattedReport writes the diff result using the specified OutputFormat.
-func WriteFormattedReport(w io.Writer, result *Result, opts ReportOptions, format OutputFormat) error {
-	if format == FormatMarkdown {
-		fmt.Fprint(w, MarkdownTableHeader())
+// WriteFormattedReport writes a diff report using the specified output format.
+func WriteFormattedReport(w io.Writer, result *Result, opts ReportOptions) error {
+	switch opts.Format {
+	case FormatMarkdown:
+		return writeMarkdownReport(w, result, opts)
+	case FormatJSON:
+		return ExportAsJSON(w, result, opts)
+	case FormatCSV:
+		return ExportAsCSV(w, result, opts)
+	default:
+		return writePlainReport(w, result, opts)
 	}
+}
 
-	for _, key := range result.MissingInRight {
-		line := FormatMissingLine(format, key, opts.RightLabel)
-		fmt.Fprintln(w, line)
+func writePlainReport(w io.Writer, result *Result, opts ReportOptions) error {
+	if len(result.MissingInLeft) == 0 && len(result.MissingInRight) == 0 && len(result.Mismatched) == 0 {
+		fmt.Fprintln(w, "No differences found.")
+		return nil
 	}
-
 	for _, key := range result.MissingInLeft {
-		line := FormatMissingLine(format, key, opts.LeftLabel)
-		fmt.Fprintln(w, line)
+		fmt.Fprintln(w, FormatMissingLine(key, "left", opts.Format))
 	}
-
+	for _, key := range result.MissingInRight {
+		fmt.Fprintln(w, FormatMissingLine(key, "right", opts.Format))
+	}
 	for _, mm := range result.Mismatched {
-		leftVal := mm.LeftValue
-		rightVal := mm.RightValue
-		if opts.MaskSecrets && IsSensitiveKey(mm.Key) {
-			leftVal = maskValue(leftVal)
-			rightVal = maskValue(rightVal)
-		}
-		line := FormatMismatchLine(format, mm.Key, leftVal, rightVal)
-		fmt.Fprintln(w, line)
+		lv := maskIfSensitive(mm.Key, mm.LeftValue, opts)
+		rv := maskIfSensitive(mm.Key, mm.RightValue, opts)
+		fmt.Fprintln(w, FormatMismatchLine(mm.Key, lv, rv, opts.Format))
 	}
-
-	if format == FormatText {
-		total := len(result.MissingInRight) + len(result.MissingInLeft) + len(result.Mismatched)
-		if total == 0 {
-			fmt.Fprintln(w, "No differences found.")
-		} else {
-			fmt.Fprintf(w, "\nTotal differences: %d\n", total)
-		}
-	}
-
+	fmt.Fprintln(w, SummaryLine(result))
 	return nil
 }
 
-// SummaryLine returns a single-line human-readable summary of the diff result.
-func SummaryLine(result *Result, leftLabel, rightLabel string) string {
-	parts := []string{}
-	if n := len(result.MissingInRight); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d missing in %s", n, rightLabel))
+func writeMarkdownReport(w io.Writer, result *Result, opts ReportOptions) error {
+	if len(result.MissingInLeft) == 0 && len(result.MissingInRight) == 0 && len(result.Mismatched) == 0 {
+		fmt.Fprintln(w, "_No differences found._")
+		return nil
 	}
-	if n := len(result.MissingInLeft); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d missing in %s", n, leftLabel))
+	fmt.Fprintln(w, MarkdownTableHeader())
+	for _, key := range result.MissingInLeft {
+		fmt.Fprintln(w, FormatMissingLine(key, "left", opts.Format))
 	}
-	if n := len(result.Mismatched); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d mismatched", n))
+	for _, key := range result.MissingInRight {
+		fmt.Fprintln(w, FormatMissingLine(key, "right", opts.Format))
 	}
-	if len(parts) == 0 {
-		return "No differences found."
+	for _, mm := range result.Mismatched {
+		lv := maskIfSensitive(mm.Key, mm.LeftValue, opts)
+		rv := maskIfSensitive(mm.Key, mm.RightValue, opts)
+		fmt.Fprintln(w, FormatMismatchLine(mm.Key, lv, rv, opts.Format))
 	}
-	return strings.Join(parts, ", ")
+	fmt.Fprintf(w, "\n> %s\n", SummaryLine(result))
+	return nil
+}
+
+// SummaryLine returns a human-readable summary of the diff result.
+func SummaryLine(result *Result) string {
+	return fmt.Sprintf(
+		"Summary: %d missing in left, %d missing in right, %d mismatched.",
+		len(result.MissingInLeft),
+		len(result.MissingInRight),
+		len(result.Mismatched),
+	)
 }
